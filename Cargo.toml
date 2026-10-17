@@ -1,0 +1,24 @@
+[package]
+name = "gray-diagnostics"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Merged diagnostics plugin for the gray agent harness: lens, shadcn-lint, uv in one sidecar."
+license = "MIT"
+
+[[bin]]
+name = "diagnostics"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+regex = "1"
+
+[profile.release]
+strip = true
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

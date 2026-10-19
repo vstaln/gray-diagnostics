@@ -39,7 +39,7 @@ fn manifest_uv() -> Value {
 fn state_dir() -> PathBuf {
     std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from("."))
         .join("uv")
 }
@@ -60,7 +60,9 @@ fn set_enabled(on: bool) -> std::io::Result<()> {
 /// `python`, `python3`, `python3.12` — an interpreter token, never a path
 /// like `.venv/bin/python` (the tool word must BE the first token).
 fn is_python_token(tok: &str) -> bool {
-    let Some(rest) = tok.strip_prefix("python") else { return false };
+    let Some(rest) = tok.strip_prefix("python") else {
+        return false;
+    };
     if rest.is_empty() {
         return true;
     }
@@ -195,7 +197,9 @@ fn main_uv() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_uv(&req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -243,7 +247,10 @@ mod tests {
     #[test]
     fn pip3_and_requirements_rewrite() {
         let r = before("pip3 install -r requirements.txt");
-        assert_eq!(r["result"]["args"]["command"], "uv pip install -r requirements.txt");
+        assert_eq!(
+            r["result"]["args"]["command"],
+            "uv pip install -r requirements.txt"
+        );
         let r = before("pip install -r dev.txt");
         assert_eq!(r["result"]["args"]["command"], "uv pip install -r dev.txt");
     }
@@ -271,7 +278,10 @@ mod tests {
         let r = before("python3.12 -m venv v");
         assert_eq!(r["result"]["args"]["command"], "uv venv v");
         // python -m anything else is left alone
-        assert_eq!(before("python -m pip install x")["result"]["decision"], "allow");
+        assert_eq!(
+            before("python -m pip install x")["result"]["decision"],
+            "allow"
+        );
         assert_eq!(before("python script.py")["result"]["decision"], "allow");
     }
 
@@ -296,13 +306,19 @@ mod tests {
     #[test]
     fn tail_after_first_segment_is_preserved() {
         let r = before("pip install x && echo done");
-        assert_eq!(r["result"]["args"]["command"], "uv pip install x && echo done");
+        assert_eq!(
+            r["result"]["args"]["command"],
+            "uv pip install x && echo done"
+        );
     }
 
     #[test]
     fn non_bash_and_missing_command_allow() {
         assert_eq!(
-            call("tool/before", json!({"name": "read", "args": {"path": "x"}}))["result"]["decision"],
+            call(
+                "tool/before",
+                json!({"name": "read", "args": {"path": "x"}})
+            )["result"]["decision"],
             "allow"
         );
         assert_eq!(

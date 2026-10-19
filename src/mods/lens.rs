@@ -31,12 +31,25 @@ use serde_json::{Value, json};
 
 /// File-shaped tools whose path arg selects the checker.
 const WRITE_TOOLS: &[&str] = &[
-    "write", "edit", "patch", "write_file", "apply_patch", "multi_edit", "notebook_edit",
+    "write",
+    "edit",
+    "patch",
+    "write_file",
+    "apply_patch",
+    "multi_edit",
+    "notebook_edit",
 ];
 
 const ESLINT_CONFIGS: &[&str] = &[
-    "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts",
-    ".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml",
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "eslint.config.cjs",
+    "eslint.config.ts",
+    ".eslintrc",
+    ".eslintrc.js",
+    ".eslintrc.cjs",
+    ".eslintrc.yaml",
+    ".eslintrc.yml",
     ".eslintrc.json",
 ];
 
@@ -48,7 +61,7 @@ const DEFAULT_MAX_ISSUES: usize = 20;
 fn gray_home() -> PathBuf {
     std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -88,13 +101,21 @@ impl Default for Config {
 
 fn norm_ext(s: &str) -> String {
     let s = s.trim().to_lowercase();
-    if s.starts_with('.') { s } else { format!(".{s}") }
+    if s.starts_with('.') {
+        s
+    } else {
+        format!(".{s}")
+    }
 }
 
 fn load_config_from(path: &Path) -> Config {
     let mut cfg = Config::default();
-    let Ok(raw) = std::fs::read_to_string(path) else { return cfg };
-    let Ok(v) = serde_json::from_str::<Value>(&raw) else { return cfg };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return cfg;
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+        return cfg;
+    };
     if let Some(b) = v.get("enabled").and_then(Value::as_bool) {
         cfg.enabled = b;
     }
@@ -167,32 +188,42 @@ fn write_enabled(enabled: bool) -> Result<(), String> {
 
 // ---------- process helpers ---------------------------------------------------
 
-fn on_path(prog: &str) -> bool {
+/// `prog` resolved against PATH → the actual file to spawn. Bare names
+/// need the extension search on Windows (`tsc` is `tsc.cmd`), which
+/// `CreateProcess` doesn't do — so spawn the resolved path, not `prog`.
+fn resolve_prog(prog: &str) -> Option<PathBuf> {
     if prog.contains('/') || prog.contains('\\') {
-        return Path::new(prog).exists();
+        let p = PathBuf::from(prog);
+        return p.is_file().then_some(p);
     }
-    let Some(paths) = std::env::var_os("PATH") else { return false };
+    let paths = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&paths) {
-        if dir.join(prog).is_file() {
-            return true;
+        let c = dir.join(prog);
+        if c.is_file() {
+            return Some(c);
         }
         #[cfg(windows)]
         for ext in ["exe", "cmd", "bat"] {
-            if dir.join(format!("{prog}.{ext}")).is_file() {
-                return true;
+            let c = dir.join(format!("{prog}.{ext}"));
+            if c.is_file() {
+                return Some(c);
             }
         }
     }
-    false
+    None
+}
+
+fn on_path(prog: &str) -> bool {
+    resolve_prog(prog).is_some()
 }
 
 /// Run argv in `cwd`, collecting stdout+stderr. Returns None when the
 /// program is missing, can't spawn, or runs past `timeout` (killed).
 fn run_timed(argv: &[String], cwd: &Path, timeout: Duration) -> Option<String> {
     let (prog, args) = argv.split_first()?;
-    if !on_path(prog) {
+    let Some(prog) = resolve_prog(prog) else {
         return None;
-    }
+    };
     let mut child = Command::new(prog)
         .args(args)
         .current_dir(cwd)
@@ -271,7 +302,11 @@ struct Check {
 }
 
 fn check(label: &str, argv: Vec<String>, cwd: PathBuf) -> Check {
-    Check { label: label.into(), argv, cwd }
+    Check {
+        label: label.into(),
+        argv,
+        cwd,
+    }
 }
 
 fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
@@ -280,7 +315,10 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
         .and_then(|e| e.to_str())
         .map(norm_ext)
         .unwrap_or_default();
-    let dir = file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let dir = file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let file_s = file.to_string_lossy().to_string();
     if cfg.disabled_langs.contains(&ext) {
         return Vec::new();
@@ -307,7 +345,12 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
             if let Some(ts) = find_upward(&dir, &["tsconfig.json"]) {
                 vec![check(
                     "tsc",
-                    vec!["tsc".into(), "--noEmit".into(), "--pretty".into(), "false".into()],
+                    vec![
+                        "tsc".into(),
+                        "--noEmit".into(),
+                        "--pretty".into(),
+                        "false".into(),
+                    ],
                     ts.parent().unwrap_or(&dir).to_path_buf(),
                 )]
             } else if let Some(es) = find_upward(&dir, ESLINT_CONFIGS) {
@@ -324,7 +367,13 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
             if on_path("ruff") {
                 vec![check(
                     "ruff",
-                    vec!["ruff".into(), "check".into(), "--output-format".into(), "concise".into(), file_s],
+                    vec![
+                        "ruff".into(),
+                        "check".into(),
+                        "--output-format".into(),
+                        "concise".into(),
+                        file_s,
+                    ],
                     dir,
                 )]
             } else {
@@ -347,7 +396,13 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
                     .map(|ct| {
                         vec![check(
                             "clippy",
-                            vec!["cargo".into(), "clippy".into(), "--quiet".into(), "--message-format".into(), "short".into()],
+                            vec![
+                                "cargo".into(),
+                                "clippy".into(),
+                                "--quiet".into(),
+                                "--message-format".into(),
+                                "short".into(),
+                            ],
                             ct.parent().unwrap_or(&dir).to_path_buf(),
                         )]
                     })
@@ -358,12 +413,24 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
         }
         ".go" => {
             let mut v = Vec::new();
-            v.push(check("gofmt", vec!["gofmt".into(), "-l".into(), file_s], dir.clone()));
-            v.push(check("go vet", vec!["go".into(), "vet".into(), ".".into()], dir));
+            v.push(check(
+                "gofmt",
+                vec!["gofmt".into(), "-l".into(), file_s],
+                dir.clone(),
+            ));
+            v.push(check(
+                "go vet",
+                vec!["go".into(), "vet".into(), ".".into()],
+                dir,
+            ));
             v
         }
         ".sh" | ".bash" => {
-            vec![check("shellcheck", vec!["shellcheck".into(), "-f".into(), "gcc".into(), file_s], dir)]
+            vec![check(
+                "shellcheck",
+                vec!["shellcheck".into(), "-f".into(), "gcc".into(), file_s],
+                dir,
+            )]
         }
         _ => {
             if cfg.fallback_ast_grep {
@@ -371,7 +438,11 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
                     .iter()
                     .find(|p| on_path(p))
                     .map(|p| {
-                        vec![check("ast-grep", vec![p.to_string(), "scan".into(), file_s], dir)]
+                        vec![check(
+                            "ast-grep",
+                            vec![p.to_string(), "scan".into(), file_s],
+                            dir,
+                        )]
                     })
                     .unwrap_or_default()
             } else {
@@ -413,7 +484,11 @@ fn session_key(params: &Value) -> (String, String) {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     (sid, name)
 }
 
@@ -437,7 +512,11 @@ fn tool_before(state: &State, params: &Value) -> Value {
     }
     let args = params.get("args").cloned().unwrap_or(json!({}));
     if let Some(path) = extract_path(&args) {
-        state.stash.lock().expect("stash").insert(session_key(params), path);
+        state
+            .stash
+            .lock()
+            .expect("stash")
+            .insert(session_key(params), path);
     }
     json!({"decision": "allow"})
 }
@@ -447,7 +526,12 @@ fn after_with_cfg(state: &State, params: &Value, cfg: &Config) -> Value {
     let Some(path) = state.stash.lock().expect("stash").remove(&key) else {
         return json!({});
     };
-    if !cfg.enabled || params.get("is_error").and_then(Value::as_bool).unwrap_or(false) {
+    if !cfg.enabled
+        || params
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
         return json!({});
     }
     let session_cwd = params
@@ -457,7 +541,11 @@ fn after_with_cfg(state: &State, params: &Value, cfg: &Config) -> Value {
         .unwrap_or(".");
     let file = {
         let p = PathBuf::from(&path);
-        if p.is_absolute() { p } else { PathBuf::from(session_cwd).join(p) }
+        if p.is_absolute() {
+            p
+        } else {
+            PathBuf::from(session_cwd).join(p)
+        }
     };
     let mut blocks = Vec::new();
     for c in checks_for(&file, cfg) {
@@ -587,7 +675,9 @@ fn run_command(argv: &[&str]) -> String {
                         _ => {
                             per_lang[&ext] = json!(cmd);
                             match write_per_lang(&per_lang) {
-                                Ok(()) => format!("{ext} → {cmd} (file path appended, or use {{file}} in the cmd)"),
+                                Ok(()) => format!(
+                                    "{ext} → {cmd} (file path appended, or use {{file}} in the cmd)"
+                                ),
                                 Err(e) => format!("couldn't write config: {e}"),
                             }
                         }
@@ -648,12 +738,16 @@ fn main_lens() -> std::io::Result<()> {
         println!("{}", manifest_lens());
         return Ok(());
     }
-    let state = State { stash: Mutex::new(HashMap::new()) };
+    let state = State {
+        stash: Mutex::new(HashMap::new()),
+    };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_lens(&state, &req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -671,13 +765,18 @@ mod tests {
     use super::*;
 
     fn st() -> State {
-        State { stash: Mutex::new(HashMap::new()) }
+        State {
+            stash: Mutex::new(HashMap::new()),
+        }
     }
 
     fn call(state: &State, method: &str, params: Value) -> Value {
-        handle_lens(state, &json!({ "id": 1, "method": method, "params": params }))
-            .0
-            .unwrap()
+        handle_lens(
+            state,
+            &json!({ "id": 1, "method": method, "params": params }),
+        )
+        .0
+        .unwrap()
     }
 
     fn sess() -> Value {
@@ -696,10 +795,18 @@ mod tests {
     #[test]
     fn before_stashes_only_write_tools() {
         let s = st();
-        let r = call(&s, "tool/before", json!({"name":"read","args":{"path":"/tmp/x.py"},"session":sess()}));
+        let r = call(
+            &s,
+            "tool/before",
+            json!({"name":"read","args":{"path":"/tmp/x.py"},"session":sess()}),
+        );
         assert_eq!(r["result"]["decision"], "allow");
         assert!(s.stash.lock().unwrap().is_empty());
-        let r = call(&s, "tool/before", json!({"name":"write","args":{"path":"/tmp/x.py"},"session":sess()}));
+        let r = call(
+            &s,
+            "tool/before",
+            json!({"name":"write","args":{"path":"/tmp/x.py"},"session":sess()}),
+        );
         assert_eq!(r["result"]["decision"], "allow");
         assert_eq!(s.stash.lock().unwrap().len(), 1);
     }
@@ -707,15 +814,27 @@ mod tests {
     #[test]
     fn after_without_stash_keeps_result() {
         let s = st();
-        let r = call(&s, "tool/after", json!({"name":"write","content":"ok","session":sess()}));
+        let r = call(
+            &s,
+            "tool/after",
+            json!({"name":"write","content":"ok","session":sess()}),
+        );
         assert_eq!(r["result"], json!({}));
     }
 
     #[test]
     fn after_on_error_result_keeps_result() {
         let s = st();
-        call(&s, "tool/before", json!({"name":"write","args":{"path":"/tmp/x.py"},"session":sess()}));
-        let r = call(&s, "tool/after", json!({"name":"write","content":"nope","is_error":true,"session":sess()}));
+        call(
+            &s,
+            "tool/before",
+            json!({"name":"write","args":{"path":"/tmp/x.py"},"session":sess()}),
+        );
+        let r = call(
+            &s,
+            "tool/after",
+            json!({"name":"write","content":"nope","is_error":true,"session":sess()}),
+        );
         assert_eq!(r["result"], json!({}));
     }
 
@@ -727,9 +846,18 @@ mod tests {
         let f = dir.join("thing.xyz");
         std::fs::write(&f, "xyz-findings-body").unwrap();
         let mut cfg = Config::default();
-        cfg.lang_overrides.insert(".xyz".into(), "cat {file}".into());
-        call(&s, "tool/before", json!({"name":"write","args":{"path":f},"session":sess()}));
-        let r = after_with_cfg(&s, &json!({"name":"write","content":"written","session":sess()}), &cfg);
+        cfg.lang_overrides
+            .insert(".xyz".into(), "cat {file}".into());
+        call(
+            &s,
+            "tool/before",
+            json!({"name":"write","args":{"path":f},"session":sess()}),
+        );
+        let r = after_with_cfg(
+            &s,
+            &json!({"name":"write","content":"written","session":sess()}),
+            &cfg,
+        );
         let c = r["content"].as_str().unwrap_or("");
         assert!(c.starts_with("written\n--- lens: custom ---\n"), "{c}");
         assert!(c.contains("xyz-findings-body"), "{c}");
@@ -744,9 +872,18 @@ mod tests {
         let f = dir.join("empty.xyz");
         std::fs::write(&f, "").unwrap();
         let mut cfg = Config::default();
-        cfg.lang_overrides.insert(".xyz".into(), "cat {file}".into());
-        call(&s, "tool/before", json!({"name":"write","args":{"path":f},"session":sess()}));
-        let r = after_with_cfg(&s, &json!({"name":"write","content":"ok","session":sess()}), &cfg);
+        cfg.lang_overrides
+            .insert(".xyz".into(), "cat {file}".into());
+        call(
+            &s,
+            "tool/before",
+            json!({"name":"write","args":{"path":f},"session":sess()}),
+        );
+        let r = after_with_cfg(
+            &s,
+            &json!({"name":"write","content":"ok","session":sess()}),
+            &cfg,
+        );
         assert_eq!(r, json!({}));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -754,7 +891,8 @@ mod tests {
     #[test]
     fn disabled_lang_skips_checker() {
         let mut cfg = Config::default();
-        cfg.lang_overrides.insert(".xyz".into(), "cat {file}".into());
+        cfg.lang_overrides
+            .insert(".xyz".into(), "cat {file}".into());
         cfg.disabled_langs.insert(".xyz".into());
         assert!(checks_for(Path::new("/tmp/a.xyz"), &cfg).is_empty());
     }
@@ -767,7 +905,10 @@ mod tests {
 
     #[test]
     fn gofmt_rewrites_output() {
-        assert_eq!(filter_findings("gofmt", "main.go\n", 20), "not gofmt-clean: main.go");
+        assert_eq!(
+            filter_findings("gofmt", "main.go\n", 20),
+            "not gofmt-clean: main.go"
+        );
         assert_eq!(filter_findings("gofmt", "", 20), "");
     }
 
@@ -791,7 +932,10 @@ mod tests {
         assert!(!cfg.enabled);
         assert_eq!(cfg.timeout_ms, 250); // clamped floor
         assert!(cfg.disabled_langs.contains(".py"));
-        assert_eq!(cfg.lang_overrides.get(".rs").map(String::as_str), Some("cargo fmt --check"));
+        assert_eq!(
+            cfg.lang_overrides.get(".rs").map(String::as_str),
+            Some("cargo fmt --check")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

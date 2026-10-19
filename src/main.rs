@@ -59,7 +59,8 @@ fn manifest() -> Value {
 
 /// `result` of a module reply (`{}` when it abstained or errored).
 fn result_of(r: (Option<Value>, bool)) -> Value {
-    r.0.and_then(|v| v.get("result").cloned()).unwrap_or_else(|| json!({}))
+    r.0.and_then(|v| v.get("result").cloned())
+        .unwrap_or_else(|| json!({}))
 }
 
 /// `tool/before` chain — lens then uv. Deny wins; otherwise the last
@@ -69,10 +70,10 @@ fn tool_before(state: &lens::State, req: &Value) -> Value {
     let mut denied: Option<Value> = None;
     let mut modified: Option<Value> = None;
     let mut messages: Vec<String> = Vec::new();
-    let steps: [&dyn Fn(&Value) -> Value; 2] = [
-        &|r| result_of(lens::handle_lens(state, r)),
-        &|r| result_of(uv::handle_uv(r)),
-    ];
+    let steps: [&dyn Fn(&Value) -> Value; 2] =
+        [&|r| result_of(lens::handle_lens(state, r)), &|r| {
+            result_of(uv::handle_uv(r))
+        }];
     for step in steps {
         let r = step(&req);
         for k in ["message", "text"] {
@@ -162,7 +163,12 @@ fn handle(state: &lens::State, req: &Value) -> (Option<Value>, bool) {
         "command/run" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let reply = match name {
-                "/diagnostics" => return (Some(json!({ "id": id, "result": { "text": overview() } })), false),
+                "/diagnostics" => {
+                    return (
+                        Some(json!({ "id": id, "result": { "text": overview() } })),
+                        false,
+                    );
+                }
                 "/lens" => lens::handle_lens(state, req).0,
                 "/shadcn" => shadcn::handle_shadcn(req).0,
                 "/uv" => uv::handle_uv(req).0,
@@ -187,12 +193,16 @@ fn main() -> std::io::Result<()> {
         println!("{}", manifest());
         return Ok(());
     }
-    let state = lens::State { stash: Mutex::new(HashMap::new()) };
+    let state = lens::State {
+        stash: Mutex::new(HashMap::new()),
+    };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle(&state, &req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -210,11 +220,15 @@ mod tests {
     use super::*;
 
     fn st() -> lens::State {
-        lens::State { stash: Mutex::new(HashMap::new()) }
+        lens::State {
+            stash: Mutex::new(HashMap::new()),
+        }
     }
 
     fn call(s: &lens::State, method: &str, params: Value) -> Value {
-        handle(s, &json!({ "id": 1, "method": method, "params": params })).0.unwrap()
+        handle(s, &json!({ "id": 1, "method": method, "params": params }))
+            .0
+            .unwrap()
     }
 
     #[test]
@@ -227,8 +241,11 @@ mod tests {
 
     #[test]
     fn uv_rewrite_survives_chain() {
-        let r = call(&st(), "tool/before",
-            json!({"name":"bash","args":{"command":"pip install x"},"session":{"id":"s"}}));
+        let r = call(
+            &st(),
+            "tool/before",
+            json!({"name":"bash","args":{"command":"pip install x"},"session":{"id":"s"}}),
+        );
         assert_eq!(r["result"]["decision"], "modify");
         assert_eq!(r["result"]["args"]["command"], "uv pip install x");
     }
@@ -236,8 +253,11 @@ mod tests {
     #[test]
     fn lens_stash_survives_chain() {
         let s = st();
-        let r = call(&s, "tool/before",
-            json!({"name":"write","args":{"path":"/tmp/x.py"},"session":{"id":"s"}}));
+        let r = call(
+            &s,
+            "tool/before",
+            json!({"name":"write","args":{"path":"/tmp/x.py"},"session":{"id":"s"}}),
+        );
         assert_eq!(r["result"]["decision"], "allow");
         assert_eq!(s.stash.lock().unwrap().len(), 1);
     }

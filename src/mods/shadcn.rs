@@ -48,7 +48,7 @@ fn manifest_shadcn() -> Value {
 fn state_dir() -> PathBuf {
     let home = std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from("."));
     home.join("shadcn-lint")
 }
@@ -66,9 +66,8 @@ static RE_ARBITRARY: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Hardcoded hex inside a class arbitrary value: bg-[#1a1a1a], text-[#fff].
-static RE_HEX_CLASS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\b[a-z-]+-\[?"?#([0-9a-fA-F]{3,8})\b"#).unwrap()
-});
+static RE_HEX_CLASS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\b[a-z-]+-\[?"?#([0-9a-fA-F]{3,8})\b"#).unwrap());
 
 /// dark: variants pinned to a palette color instead of a semantic token.
 static RE_DARK: LazyLock<Regex> = LazyLock::new(|| {
@@ -101,14 +100,20 @@ fn lint_tsx(content: &str, out: &mut Vec<Finding>) {
             out.push(Finding {
                 line: ln,
                 rule: "arbitrary-value",
-                detail: format!("`{}` — prefer a spacing/size token or CSS var (`{cls}-(--token)`)", m.as_str()),
+                detail: format!(
+                    "`{}` — prefer a spacing/size token or CSS var (`{cls}-(--token)`)",
+                    m.as_str()
+                ),
             });
         }
         for m in RE_HEX_CLASS.find_iter(line) {
             out.push(Finding {
                 line: ln,
                 rule: "hardcoded-hex",
-                detail: format!("`{}` — prefer a theme token (bg-primary, text-muted-foreground) or CSS var", m.as_str()),
+                detail: format!(
+                    "`{}` — prefer a theme token (bg-primary, text-muted-foreground) or CSS var",
+                    m.as_str()
+                ),
             });
         }
         for m in RE_DARK.find_iter(line) {
@@ -147,14 +152,19 @@ fn lint_css(content: &str, out: &mut Vec<Finding>) {
             out.push(Finding {
                 line: i + 1,
                 rule: "hardcoded-hex",
-                detail: format!("`{}` — prefer a CSS variable so themes/dark mode can override", m.as_str()),
+                detail: format!(
+                    "`{}` — prefer a CSS variable so themes/dark mode can override",
+                    m.as_str()
+                ),
             });
         }
     }
 }
 
 fn lint_file(path: &Path, out: &mut Vec<(PathBuf, Finding)>) {
-    let Ok(content) = std::fs::read_to_string(path) else { return };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
     let mut file_findings = Vec::new();
     match path.extension().and_then(|e| e.to_str()) {
         Some("tsx") | Some("jsx") => lint_tsx(&content, &mut file_findings),
@@ -171,15 +181,27 @@ fn collect_files(path: &Path, out: &mut Vec<PathBuf>) {
         return;
     }
     if path.is_file() {
-        if matches!(path.extension().and_then(|e| e.to_str()), Some("tsx" | "jsx" | "css")) {
+        if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("tsx" | "jsx" | "css")
+        ) {
             out.push(path.to_path_buf());
         }
         return;
     }
     const SKIP: &[&str] = &[
-        "node_modules", ".git", "dist", "build", ".next", "target", "coverage", ".gray",
+        "node_modules",
+        ".git",
+        "dist",
+        "build",
+        ".next",
+        "target",
+        "coverage",
+        ".gray",
     ];
-    let Ok(rd) = std::fs::read_dir(path) else { return };
+    let Ok(rd) = std::fs::read_dir(path) else {
+        return;
+    };
     for e in rd.flatten() {
         if out.len() >= FILE_CAP {
             return;
@@ -191,7 +213,10 @@ fn collect_files(path: &Path, out: &mut Vec<PathBuf>) {
             if !name.starts_with('.') && !SKIP.contains(&name.as_ref()) {
                 collect_files(&p, out);
             }
-        } else if matches!(p.extension().and_then(|x| x.to_str()), Some("tsx" | "jsx" | "css")) {
+        } else if matches!(
+            p.extension().and_then(|x| x.to_str()),
+            Some("tsx" | "jsx" | "css")
+        ) {
             out.push(p);
         }
     }
@@ -213,7 +238,11 @@ fn builtin_pass(path: &Path) -> Vec<String> {
 // --- project detection ------------------------------------------------------
 
 fn find_up(start: &Path, name: &str) -> Option<PathBuf> {
-    let mut dir = Some(if start.is_file() { start.parent()?.to_path_buf() } else { start.to_path_buf() });
+    let mut dir = Some(if start.is_file() {
+        start.parent()?.to_path_buf()
+    } else {
+        start.to_path_buf()
+    });
     for _ in 0..10 {
         let d = dir?;
         let cand = d.join(name);
@@ -234,8 +263,7 @@ fn pkg_has(path: &Path, needles: &[&str]) -> bool {
 
 /// Project declares shadcn → the official CLI presumably applies.
 fn has_shadcn_deps(path: &Path) -> bool {
-    pkg_has(path, &["shadcn", "@shadcn"])
-        || find_up(path, "components.json").is_some()
+    pkg_has(path, &["shadcn", "@shadcn"]) || find_up(path, "components.json").is_some()
 }
 
 /// Hook gate: shadcn or plain tailwind projects.
@@ -245,22 +273,84 @@ fn has_ui_deps(path: &Path) -> bool {
 
 // --- official CLI -----------------------------------------------------------
 
-fn official_lint(path: &Path) -> Result<String, String> {
-    let out = std::process::Command::new("timeout")
-        .args(["45", "npx", "--yes", "@shadcn/ui", "lint"])
-        .arg(path)
+/// `npx` resolved against PATH — on Windows the npm shim is `npx.cmd`,
+/// which `CreateProcess` won't find by bare name, so spawn the file.
+fn find_npx() -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&paths) {
+        for name in ["npx", "npx.exe", "npx.cmd", "npx.bat"] {
+            let c = dir.join(name);
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+/// `npx args` in `dir`, captured output, bounded by a deadline — the
+/// `timeout(1)` wrapper ported to spawn+try_wait so it works on
+/// Windows/macOS. Err on missing npx, spawn failure, timeout, or nonzero
+/// exit.
+fn run_npx(args: &[&str], dir: &Path, secs: u64) -> Result<(bool, String), String> {
+    use std::io::Read;
+    let Some(npx) = find_npx() else {
+        return Err("npx not found on PATH".into());
+    };
+    let mut child = std::process::Command::new(npx)
+        .args(args)
+        .arg(dir)
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| format!("couldn't spawn npx: {e}"))?;
-    if out.status.success() {
-        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok(if text.is_empty() { "no findings".into() } else { text })
+    // Drain both pipes on threads so a chatty child can't deadlock.
+    let drain = |mut r: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut b = String::new();
+            let _ = r.read_to_string(&mut b);
+            b
+        })
+    };
+    let out_t = child.stdout.take().map(|s| drain(Box::new(s)));
+    let err_t = child.stderr.take().map(|s| drain(Box::new(s)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("npx timed out after {secs}s"));
+            }
+            Err(e) => return Err(format!("couldn't wait on npx: {e}")),
+        }
+    };
+    let stdout = out_t.and_then(|t| t.join().ok()).unwrap_or_default();
+    let stderr = err_t.and_then(|t| t.join().ok()).unwrap_or_default();
+    Ok((
+        status.success(),
+        if status.success() { stdout } else { stderr },
+    ))
+}
+
+fn official_lint(path: &Path) -> Result<String, String> {
+    let (ok, text) = run_npx(&["--yes", "@shadcn/ui", "lint"], path, 45)?;
+    if ok {
+        let text = text.trim().to_string();
+        Ok(if text.is_empty() {
+            "no findings".into()
+        } else {
+            text
+        })
     } else {
         Err(format!(
-            "npx @shadcn/ui lint exited {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).chars().take(200).collect::<String>()
+            "npx @shadcn/ui lint failed: {}",
+            text.chars().take(200).collect::<String>()
         ))
     }
 }
@@ -308,9 +398,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
 
 // --- tool/after -------------------------------------------------------------
 
-static RE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"[/\w.\-~]+/[\w.\-/]+\.(?:tsx|css)\b"#).unwrap()
-});
+static RE_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[/\w.\-~]+/[\w.\-/]+\.(?:tsx|css)\b"#).unwrap());
 
 fn is_write_tool(name: &str) -> bool {
     let n = name.to_lowercase();
@@ -353,7 +442,11 @@ fn tool_after(params: &Value) -> Option<Value> {
     if !enabled() {
         return None;
     }
-    if params.get("is_error").and_then(Value::as_bool).unwrap_or(false) {
+    if params
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         return None;
     }
     let name = params.get("name").and_then(Value::as_str)?;
@@ -370,10 +463,20 @@ fn tool_after(params: &Value) -> Option<Value> {
         return None;
     }
     findings.truncate(HOOK_FINDING_CAP);
-    let mut s = params.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut s = params
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     s.push_str("\n\nshadcn-lint findings:\n");
     for (_, f) in &findings {
-        s.push_str(&format!("  {}:{}: [{}] {}\n", file.display(), f.line, f.rule, f.detail));
+        s.push_str(&format!(
+            "  {}:{}: [{}] {}\n",
+            file.display(),
+            f.line,
+            f.rule,
+            f.detail
+        ));
     }
     Some(json!({ "content": s.trim_end() }))
 }
@@ -386,11 +489,18 @@ fn run_command(argv: &[&str]) -> String {
                 std::fs::create_dir_all(state_dir()).and_then(|_| std::fs::write(&flag, b""))
             } else {
                 std::fs::remove_file(&flag).or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
                 })
             };
             match res {
-                Ok(()) => format!("shadcn-lint {}", if argv[0] == "off" { "off" } else { "on" }),
+                Ok(()) => format!(
+                    "shadcn-lint {}",
+                    if argv[0] == "off" { "off" } else { "on" }
+                ),
                 Err(e) => format!("couldn't flip state: {e}"),
             }
         }
@@ -449,7 +559,9 @@ fn main_shadcn() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_shadcn(&req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -467,7 +579,9 @@ mod tests {
     use super::*;
 
     fn call(method: &str, params: Value) -> Value {
-        handle_shadcn(&json!({ "id": 1, "method": method, "params": params })).0.unwrap()
+        handle_shadcn(&json!({ "id": 1, "method": method, "params": params }))
+            .0
+            .unwrap()
     }
 
     #[test]
@@ -482,7 +596,10 @@ mod tests {
     #[test]
     fn arbitrary_and_hex_and_dark_flagged() {
         let mut out = Vec::new();
-        lint_tsx(r#"<div className="w-[375px] bg-[#1a1a1a] dark:bg-slate-900 p-4 p-4 text-[15px]" />"#, &mut out);
+        lint_tsx(
+            r#"<div className="w-[375px] bg-[#1a1a1a] dark:bg-slate-900 p-4 p-4 text-[15px]" />"#,
+            &mut out,
+        );
         let rules: Vec<_> = out.iter().map(|f| f.rule).collect();
         assert!(rules.contains(&"arbitrary-value"));
         assert!(rules.contains(&"hardcoded-hex"));
@@ -493,14 +610,20 @@ mod tests {
     #[test]
     fn tokens_and_vars_pass() {
         let mut out = Vec::new();
-        lint_tsx(r#"<div className="w-96 bg-primary dark:bg-background w-[var(--sidebar-w)] text-sm" />"#, &mut out);
+        lint_tsx(
+            r#"<div className="w-96 bg-primary dark:bg-background w-[var(--sidebar-w)] text-sm" />"#,
+            &mut out,
+        );
         assert!(out.is_empty(), "unexpected: {out:?}");
     }
 
     #[test]
     fn css_hex_flagged_but_var_defs_pass() {
         let mut out = Vec::new();
-        lint_css(":root { --brand: #a1b2c3; }\n.card { color: #fff; }", &mut out);
+        lint_css(
+            ":root { --brand: #a1b2c3; }\n.card { color: #fff; }",
+            &mut out,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].line, 2);
     }
@@ -511,16 +634,22 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("a.tsx");
         std::fs::write(&f, r#"<div className="w-[375px]" />"#).unwrap();
-        let r = call("tool/after", json!({
-            "name": "write", "content": format!("wrote {}", f.display()),
-            "is_error": false, "session": {"cwd": dir}
-        }));
+        let r = call(
+            "tool/after",
+            json!({
+                "name": "write", "content": format!("wrote {}", f.display()),
+                "is_error": false, "session": {"cwd": dir}
+            }),
+        );
         assert_eq!(r["result"], json!({})); // no package.json → silent
         std::fs::write(dir.join("package.json"), r#"{"deps":{"tailwindcss":"4"}}"#).unwrap();
-        let r = call("tool/after", json!({
-            "name": "write", "content": format!("wrote {}", f.display()),
-            "is_error": false, "session": {"cwd": dir}
-        }));
+        let r = call(
+            "tool/after",
+            json!({
+                "name": "write", "content": format!("wrote {}", f.display()),
+                "is_error": false, "session": {"cwd": dir}
+            }),
+        );
         let c = r["result"]["content"].as_str().unwrap();
         assert!(c.contains("arbitrary-value"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -528,13 +657,19 @@ mod tests {
 
     #[test]
     fn tool_after_ignores_non_write_and_errors() {
-        let r = call("tool/after", json!({
-            "name": "read", "content": "x.tsx", "is_error": false, "session": {}
-        }));
+        let r = call(
+            "tool/after",
+            json!({
+                "name": "read", "content": "x.tsx", "is_error": false, "session": {}
+            }),
+        );
         assert_eq!(r["result"], json!({}));
-        let r = call("tool/after", json!({
-            "name": "write", "content": "x.tsx", "is_error": true, "session": {}
-        }));
+        let r = call(
+            "tool/after",
+            json!({
+                "name": "write", "content": "x.tsx", "is_error": true, "session": {}
+            }),
+        );
         assert_eq!(r["result"], json!({}));
     }
 }

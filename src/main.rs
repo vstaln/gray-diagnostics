@@ -53,6 +53,12 @@ fn manifest() -> Value {
             }
         }],
         "commands": ["/diagnostics", "/lens", "/shadcn", "/uv"],
+        "command_descriptions": {
+            "/diagnostics": "list the diagnostic checkers",
+            "/lens": "toggle post-edit language checkers",
+            "/shadcn": "toggle shadcn and Tailwind lint",
+            "/uv": "toggle rewriting pip and poetry to uv",
+        },
         "hooks": ["tool/before", "tool/after"],
     })
 }

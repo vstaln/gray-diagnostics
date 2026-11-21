@@ -221,9 +221,7 @@ fn on_path(prog: &str) -> bool {
 /// program is missing, can't spawn, or runs past `timeout` (killed).
 fn run_timed(argv: &[String], cwd: &Path, timeout: Duration) -> Option<String> {
     let (prog, args) = argv.split_first()?;
-    let Some(prog) = resolve_prog(prog) else {
-        return None;
-    };
+    let prog = resolve_prog(prog)?;
     let mut child = Command::new(prog)
         .args(args)
         .current_dir(cwd)
@@ -412,18 +410,14 @@ fn checks_for(file: &Path, cfg: &Config) -> Vec<Check> {
             }
         }
         ".go" => {
-            let mut v = Vec::new();
-            v.push(check(
-                "gofmt",
-                vec!["gofmt".into(), "-l".into(), file_s],
-                dir.clone(),
-            ));
-            v.push(check(
-                "go vet",
-                vec!["go".into(), "vet".into(), ".".into()],
-                dir,
-            ));
-            v
+            vec![
+                check(
+                    "gofmt",
+                    vec!["gofmt".into(), "-l".into(), file_s],
+                    dir.clone(),
+                ),
+                check("go vet", vec!["go".into(), "vet".into(), ".".into()], dir),
+            ]
         }
         ".sh" | ".bash" => {
             vec![check(

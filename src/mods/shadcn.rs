@@ -398,8 +398,9 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
 
 // --- tool/after -------------------------------------------------------------
 
-static RE_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"[/\w.\-~]+/[\w.\-/]+\.(?:tsx|css)\b"#).unwrap());
+static RE_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:[A-Za-z]:)?[\w.~-]*(?:[\\/][\w.~-]+)+\.(?:tsx|css)\b"#).unwrap()
+});
 
 fn is_write_tool(name: &str) -> bool {
     let n = name.to_lowercase();

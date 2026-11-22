@@ -74,9 +74,7 @@ fn is_python_token(tok: &str) -> bool {
 /// Rewrite `command` if its first segment starts with a Python-packaging
 /// tool word. Returns the new command, or None to leave it alone.
 fn rewrite(command: &str) -> Option<String> {
-    let split = command
-        .find(|c| matches!(c, '|' | ';' | '&' | '\n'))
-        .unwrap_or(command.len());
+    let split = command.find(['|', ';', '&', '\n']).unwrap_or(command.len());
     let (head, tail) = command.split_at(split);
     let indent = &head[..head.len() - head.trim_start().len()];
     let trail = &head[head.trim_end().len()..];
@@ -97,12 +95,11 @@ fn rewrite(command: &str) -> Option<String> {
             format!("uv {mapped}{}", join_rest(&tokens, 2))
         }
         // `python -m venv .venv` -> `uv venv .venv`.
-        t if is_python_token(t) => {
-            if tokens.get(1) == Some(&"-m") && tokens.get(2) == Some(&"venv") {
-                format!("uv venv{}", join_rest(&tokens, 3))
-            } else {
-                return None;
-            }
+        t if is_python_token(t)
+            && tokens.get(1) == Some(&"-m")
+            && tokens.get(2) == Some(&"venv") =>
+        {
+            format!("uv venv{}", join_rest(&tokens, 3))
         }
         _ => return None,
     };

@@ -22,6 +22,8 @@ use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
+mod parts;
+
 #[allow(dead_code)]
 #[path = "mods/lens.rs"]
 mod lens;
@@ -32,12 +34,28 @@ mod shadcn;
 #[path = "mods/uv.rs"]
 mod uv;
 
-fn manifest() -> Value {
-    json!({
-        "name": "diagnostics",
-        "version": env!("CARGO_PKG_VERSION"),
-        "protocol": "2.0",
-        "tools": [{
+const PARTS: &[parts::Part] = &[
+    parts::Part {
+        name: "lens",
+        default: true,
+        description: "post-edit language checkers appended to file results",
+    },
+    parts::Part {
+        name: "shadcn-lint",
+        default: true,
+        description: "shadcn and Tailwind lint after .tsx/.css writes",
+    },
+    parts::Part {
+        name: "uv",
+        default: true,
+        description: "rewrite pip, poetry and venv commands to uv",
+    },
+];
+
+fn manifest(parts: &parts::Parts) -> Value {
+    let mut tools: Vec<Value> = Vec::new();
+    if parts.on("shadcn-lint") {
+        tools.push(json!({
             "name": "shadcn_lint",
             "description": "Lint .tsx/.css files for shadcn/Tailwind rule violations: \
                 arbitrary numeric values (w-[375px]) that should be design tokens, hardcoded \
@@ -51,15 +69,39 @@ fn manifest() -> Value {
                     "path": { "type": "string", "description": "File or dir to lint; default: current dir." }
                 }
             }
-        }],
-        "commands": ["/diagnostics", "/lens", "/shadcn", "/uv"],
-        "command_descriptions": {
-            "/diagnostics": "list the diagnostic checkers",
-            "/lens": "toggle post-edit language checkers",
-            "/shadcn": "toggle shadcn and Tailwind lint",
-            "/uv": "toggle rewriting pip and poetry to uv",
-        },
-        "hooks": ["tool/before", "tool/after"],
+        }));
+    }
+    let mut commands: Vec<&str> = vec!["/diagnostics"];
+    let mut descriptions = serde_json::Map::new();
+    descriptions.insert("/diagnostics".into(), json!("list the diagnostic checkers"));
+    if parts.on("lens") {
+        commands.push("/lens");
+        descriptions.insert("/lens".into(), json!("toggle post-edit language checkers"));
+    }
+    if parts.on("shadcn-lint") {
+        commands.push("/shadcn");
+        descriptions.insert("/shadcn".into(), json!("toggle shadcn and Tailwind lint"));
+    }
+    if parts.on("uv") {
+        commands.push("/uv");
+        descriptions.insert("/uv".into(), json!("toggle rewriting pip and poetry to uv"));
+    }
+    let mut hooks: Vec<&str> = Vec::new();
+    if parts.on("lens") || parts.on("uv") {
+        hooks.push("tool/before");
+    }
+    if parts.on("lens") || parts.on("shadcn-lint") {
+        hooks.push("tool/after");
+    }
+    json!({
+        "name": "diagnostics",
+        "version": env!("CARGO_PKG_VERSION"),
+        "protocol": "2.0",
+        "tools": tools,
+        "commands": commands,
+        "command_descriptions": descriptions,
+        "hooks": hooks,
+        "parts": parts.manifest(PARTS),
     })
 }
 
@@ -71,15 +113,20 @@ fn result_of(r: (Option<Value>, bool)) -> Value {
 
 /// `tool/before` chain — lens then uv. Deny wins; otherwise the last
 /// `modify` (each module sees earlier rewrites); otherwise allow.
-fn tool_before(state: &lens::State, req: &Value) -> Value {
+fn tool_before(state: &lens::State, req: &Value, parts: &parts::Parts) -> Value {
     let mut req = req.clone();
     let mut denied: Option<Value> = None;
     let mut modified: Option<Value> = None;
     let mut messages: Vec<String> = Vec::new();
-    let steps: [&dyn Fn(&Value) -> Value; 2] =
-        [&|r| result_of(lens::handle_lens(state, r)), &|r| {
-            result_of(uv::handle_uv(r))
-        }];
+    let lens_step = |r: &Value| result_of(lens::handle_lens(state, r));
+    let uv_step = |r: &Value| result_of(uv::handle_uv(r));
+    let mut steps: Vec<&dyn Fn(&Value) -> Value> = Vec::new();
+    if parts.on("lens") {
+        steps.push(&lens_step);
+    }
+    if parts.on("uv") {
+        steps.push(&uv_step);
+    }
     for step in steps {
         let r = step(&req);
         for k in ["message", "text"] {
@@ -118,7 +165,7 @@ fn tool_before(state: &lens::State, req: &Value) -> Value {
 
 /// `tool/after` chain — shadcn then lens; each sees the previous module's
 /// rewritten fields. `{}` when nobody rewrote anything.
-fn tool_after(state: &lens::State, req: &Value) -> Value {
+fn tool_after(state: &lens::State, req: &Value, parts: &parts::Parts) -> Value {
     let mut req = req.clone();
     let mut changed = serde_json::Map::new();
     let mut apply = |r: Value, req: &mut Value| {
@@ -129,25 +176,45 @@ fn tool_after(state: &lens::State, req: &Value) -> Value {
             }
         }
     };
-    let r = result_of(shadcn::handle_shadcn(&req));
-    apply(r, &mut req);
-    let r = result_of(lens::handle_lens(state, &req));
-    apply(r, &mut req);
+    if parts.on("shadcn-lint") {
+        let r = result_of(shadcn::handle_shadcn(&req));
+        apply(r, &mut req);
+    }
+    if parts.on("lens") {
+        let r = result_of(lens::handle_lens(state, &req));
+        apply(r, &mut req);
+    }
     Value::Object(changed)
 }
 
 /// `/diagnostics` — merged-plugin overview.
-fn overview() -> String {
-    format!(
-        "gray-diagnostics {} — one sidecar, three checkers:\n\
-         \x20 /lens     post-edit language checkers appended to file-tool results (on|off|status|lang)\n\
-         \x20 /shadcn   shadcn/Tailwind lint after .tsx/.css writes + shadcn_lint tool (on|off)\n\
-         \x20 /uv       rewrite pip/poetry/`python -m venv` bash commands to uv (on|off|status)",
+fn overview(parts: &parts::Parts) -> String {
+    let mut lines: Vec<String> = vec![format!(
+        "gray-diagnostics {} — one sidecar, three checkers:",
         env!("CARGO_PKG_VERSION")
-    )
+    )];
+    if parts.on("lens") {
+        lines.push(
+            "\x20 /lens     post-edit language checkers appended to file-tool results (on|off|status|lang)"
+                .into(),
+        );
+    }
+    if parts.on("shadcn-lint") {
+        lines.push(
+            "\x20 /shadcn   shadcn/Tailwind lint after .tsx/.css writes + shadcn_lint tool (on|off)"
+                .into(),
+        );
+    }
+    if parts.on("uv") {
+        lines.push(
+            "\x20 /uv       rewrite pip/poetry/`python -m venv` bash commands to uv (on|off|status)"
+                .into(),
+        );
+    }
+    lines.join("\n")
 }
 
-fn handle(state: &lens::State, req: &Value) -> (Option<Value>, bool) {
+fn handle(state: &lens::State, req: &Value, parts: &parts::Parts) -> (Option<Value>, bool) {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(Value::Null);
@@ -155,12 +222,22 @@ fn handle(state: &lens::State, req: &Value) -> (Option<Value>, bool) {
         return (None, method == "plugin/shutdown");
     };
     let result = match method {
-        "plugin/manifest" => manifest(),
-        "tool/before" => tool_before(state, req),
-        "tool/after" => tool_after(state, req),
+        "plugin/manifest" => manifest(parts),
+        "tool/before" => {
+            if !parts.on("lens") && !parts.on("uv") {
+                return (Some(json!({ "id": id, "result": {} })), false);
+            }
+            tool_before(state, req, parts)
+        }
+        "tool/after" => {
+            if !parts.on("lens") && !parts.on("shadcn-lint") {
+                return (Some(json!({ "id": id, "result": {} })), false);
+            }
+            tool_after(state, req, parts)
+        }
         "tool/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-            if name == "shadcn_lint" {
+            if name == "shadcn_lint" && parts.on("shadcn-lint") {
                 let (reply, _) = shadcn::handle_shadcn(req);
                 return (reply, false);
             }
@@ -171,13 +248,13 @@ fn handle(state: &lens::State, req: &Value) -> (Option<Value>, bool) {
             let reply = match name {
                 "/diagnostics" => {
                     return (
-                        Some(json!({ "id": id, "result": { "text": overview() } })),
+                        Some(json!({ "id": id, "result": { "text": overview(parts) } })),
                         false,
                     );
                 }
-                "/lens" => lens::handle_lens(state, req).0,
-                "/shadcn" => shadcn::handle_shadcn(req).0,
-                "/uv" => uv::handle_uv(req).0,
+                "/lens" if parts.on("lens") => lens::handle_lens(state, req).0,
+                "/shadcn" if parts.on("shadcn-lint") => shadcn::handle_shadcn(req).0,
+                "/uv" if parts.on("uv") => uv::handle_uv(req).0,
                 _ => {
                     let text = format!("unknown command {name} — try /diagnostics");
                     return (Some(json!({ "id": id, "result": { "text": text } })), false);
@@ -195,8 +272,9 @@ fn handle(state: &lens::State, req: &Value) -> (Option<Value>, bool) {
 }
 
 fn main() -> std::io::Result<()> {
+    let parts = parts::Parts::load("diagnostics", PARTS);
     if std::env::args().nth(1).as_deref() == Some("manifest") {
-        println!("{}", manifest());
+        println!("{}", manifest(&parts));
         return Ok(());
     }
     let state = lens::State {
@@ -209,7 +287,7 @@ fn main() -> std::io::Result<()> {
         let Ok(req) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        let (reply, exit) = handle(&state, &req);
+        let (reply, exit) = handle(&state, &req, &parts);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
             stdout.flush()?;
@@ -232,14 +310,19 @@ mod tests {
     }
 
     fn call(s: &lens::State, method: &str, params: Value) -> Value {
-        handle(s, &json!({ "id": 1, "method": method, "params": params }))
-            .0
-            .unwrap()
+        let parts = parts::Parts::load("diagnostics", PARTS);
+        handle(
+            s,
+            &json!({ "id": 1, "method": method, "params": params }),
+            &parts,
+        )
+        .0
+        .unwrap()
     }
 
     #[test]
     fn manifest_is_union() {
-        let m = manifest();
+        let m = manifest(&parts::Parts::load("diagnostics", PARTS));
         assert_eq!(m["name"], "diagnostics");
         assert_eq!(m["hooks"], json!(["tool/before", "tool/after"]));
         assert_eq!(m["tools"][0]["name"], "shadcn_lint");

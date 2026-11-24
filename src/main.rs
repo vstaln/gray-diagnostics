@@ -1,4 +1,4 @@
-//! gray-diagnostics — merged post-write checkers + command rewriter.
+//! gray-lint — merged post-write checkers + command rewriter.
 //!
 //! One sidecar for gray-lens, gray-shadcn-lint and gray-uv. Each source
 //! lives verbatim in `mods/` with its own `~/.gray/<orig>/` state and slash
@@ -14,7 +14,7 @@
 //!   first so it scans the original tool output for the written path.
 //! - `tool/call`   → `shadcn_lint` → shadcn.
 //! - `command/run` → `/lens`, `/shadcn`, `/uv` routed to their owners;
-//!   `/diagnostics` prints an overview.
+//!   `/lint` prints an overview.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -71,9 +71,9 @@ fn manifest(parts: &parts::Parts) -> Value {
             }
         }));
     }
-    let mut commands: Vec<&str> = vec!["/diagnostics"];
+    let mut commands: Vec<&str> = vec!["/lint"];
     let mut descriptions = serde_json::Map::new();
-    descriptions.insert("/diagnostics".into(), json!("list the diagnostic checkers"));
+    descriptions.insert("/lint".into(), json!("list the diagnostic checkers"));
     if parts.on("lens") {
         commands.push("/lens");
         descriptions.insert("/lens".into(), json!("toggle post-edit language checkers"));
@@ -94,7 +94,7 @@ fn manifest(parts: &parts::Parts) -> Value {
         hooks.push("tool/after");
     }
     json!({
-        "name": "diagnostics",
+        "name": "lint",
         "version": env!("CARGO_PKG_VERSION"),
         "protocol": "2.0",
         "tools": tools,
@@ -187,10 +187,10 @@ fn tool_after(state: &lens::State, req: &Value, parts: &parts::Parts) -> Value {
     Value::Object(changed)
 }
 
-/// `/diagnostics` — merged-plugin overview.
+/// `/lint` — merged-plugin overview.
 fn overview(parts: &parts::Parts) -> String {
     let mut lines: Vec<String> = vec![format!(
-        "gray-diagnostics {} — one sidecar, three checkers:",
+        "gray-lint {} — one sidecar, three checkers:",
         env!("CARGO_PKG_VERSION")
     )];
     if parts.on("lens") {
@@ -246,7 +246,7 @@ fn handle(state: &lens::State, req: &Value, parts: &parts::Parts) -> (Option<Val
         "command/run" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let reply = match name {
-                "/diagnostics" => {
+                "/lint" => {
                     return (
                         Some(json!({ "id": id, "result": { "text": overview(parts) } })),
                         false,
@@ -256,7 +256,7 @@ fn handle(state: &lens::State, req: &Value, parts: &parts::Parts) -> (Option<Val
                 "/shadcn" if parts.on("shadcn-lint") => shadcn::handle_shadcn(req).0,
                 "/uv" if parts.on("uv") => uv::handle_uv(req).0,
                 _ => {
-                    let text = format!("unknown command {name} — try /diagnostics");
+                    let text = format!("unknown command {name} — try /lint");
                     return (Some(json!({ "id": id, "result": { "text": text } })), false);
                 }
             };
@@ -272,7 +272,7 @@ fn handle(state: &lens::State, req: &Value, parts: &parts::Parts) -> (Option<Val
 }
 
 fn main() -> std::io::Result<()> {
-    let parts = parts::Parts::load("diagnostics", PARTS);
+    let parts = parts::Parts::load("lint", PARTS);
     if std::env::args().nth(1).as_deref() == Some("manifest") {
         println!("{}", manifest(&parts));
         return Ok(());
@@ -310,7 +310,7 @@ mod tests {
     }
 
     fn call(s: &lens::State, method: &str, params: Value) -> Value {
-        let parts = parts::Parts::load("diagnostics", PARTS);
+        let parts = parts::Parts::load("lint", PARTS);
         handle(
             s,
             &json!({ "id": 1, "method": method, "params": params }),
@@ -322,8 +322,8 @@ mod tests {
 
     #[test]
     fn manifest_is_union() {
-        let m = manifest(&parts::Parts::load("diagnostics", PARTS));
-        assert_eq!(m["name"], "diagnostics");
+        let m = manifest(&parts::Parts::load("lint", PARTS));
+        assert_eq!(m["name"], "lint");
         assert_eq!(m["hooks"], json!(["tool/before", "tool/after"]));
         assert_eq!(m["tools"][0]["name"], "shadcn_lint");
     }
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn commands_route() {
         let s = st();
-        for c in ["/diagnostics", "/lens", "/shadcn", "/uv"] {
+        for c in ["/lint", "/lens", "/shadcn", "/uv"] {
             let r = call(&s, "command/run", json!({"name": c, "argv": ["status"]}));
             assert!(r["result"]["text"].as_str().is_some(), "{c}: {r}");
         }

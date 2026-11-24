@@ -12,8 +12,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "gray-diagnostics"
-version = "0.1.1"
+name = "gray-lint"
+version = "0.2.0"
 dependencies = [
  "regex",
  "serde_json",

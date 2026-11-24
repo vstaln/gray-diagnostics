@@ -54,8 +54,8 @@ jobs:
         run: |
           mkdir -p "stage/${{ matrix.target }}"
           ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
-          cp "target/${{ matrix.target }}/release/diagnostics$ext" "stage/${{ matrix.target }}/diagnostics$ext"
-          chmod 755 "stage/${{ matrix.target }}/diagnostics$ext"
+          cp "target/${{ matrix.target }}/release/lint$ext" "stage/${{ matrix.target }}/lint$ext"
+          chmod 755 "stage/${{ matrix.target }}/lint$ext"
       - uses: actions/upload-artifact@v4
         with:
           name: leg-${{ matrix.target }}
@@ -83,7 +83,7 @@ jobs:
             -C stage plugin.sh \
             aarch64-apple-darwin aarch64-unknown-linux-musl \
             x86_64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-musl \
-            | gzip -n -9 > "dist/gray-diagnostics-${version}.tar.gz"
+            | gzip -n -9 > "dist/gray-lint-${version}.tar.gz"
           cd dist
-          shasum -a 256 "gray-diagnostics-${version}.tar.gz" > "gray-diagnostics-${version}.tar.gz.sha256"
+          shasum -a 256 "gray-lint-${version}.tar.gz" > "gray-lint-${version}.tar.gz.sha256"
           gh release create "$GITHUB_REF_NAME" ./* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

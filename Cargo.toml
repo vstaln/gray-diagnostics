@@ -1,13 +1,13 @@
 [package]
-name = "gray-diagnostics"
-version = "0.1.2"
+name = "gray-lint"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
-description = "Merged diagnostics plugin for the gray agent harness: lens, shadcn-lint, uv in one sidecar."
+description = "Merged lint plugin for the gray agent harness: lens, shadcn-lint, uv in one sidecar."
 license = "MIT"
 
 [[bin]]
-name = "diagnostics"
+name = "lint"
 path = "src/main.rs"
 
 [dependencies]
